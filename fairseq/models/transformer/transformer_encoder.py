@@ -368,3 +368,95 @@ class TransformerEncoder(TransformerEncoderBase):
         return super().build_encoder_layer(
             TransformerConfig.from_namespace(args),
         )
+
+
+class TransformerEncoderCascade(TransformerEncoderBase):
+
+    def __init__(
+        self,
+        cfg,
+        dictionary,
+        embed_tokens,
+        return_fc=False,
+    ):
+        self.cfg = cfg
+        super(TransformerEncoderBase, self).__init__(dictionary)
+        self.register_buffer("version", torch.Tensor([3]))
+
+        self.dropout_module = FairseqDropout(
+            cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
+        )
+        self.encoder_layerdrop = cfg.encoder.layerdrop
+        self.return_fc = return_fc
+
+        embed_dim = embed_tokens.embedding_dim
+        self.padding_idx = embed_tokens.padding_idx
+        self.max_source_positions = cfg.max_source_positions
+
+        self.embed_tokens = embed_tokens
+
+        self.embed_scale = 1.0 if cfg.no_scale_embedding else math.sqrt(embed_dim)
+
+        self.embed_positions = (
+            PositionalEmbedding(
+                cfg.max_source_positions,
+                embed_dim,
+                self.padding_idx,
+                learned=cfg.encoder.learned_pos,
+            )
+            if not cfg.no_token_positional_embeddings
+            else None
+        )
+        if cfg.layernorm_embedding:
+            self.layernorm_embedding = LayerNorm(embed_dim, export=cfg.export)
+        else:
+            self.layernorm_embedding = None
+
+        if not cfg.adaptive_input and cfg.quant_noise.pq > 0:
+            self.quant_noise = apply_quant_noise_(
+                nn.Linear(embed_dim, embed_dim, bias=False),
+                cfg.quant_noise.pq,
+                cfg.quant_noise.pq_block_size,
+            )
+        else:
+            self.quant_noise = None
+
+        if self.encoder_layerdrop > 0.0:
+            self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
+        else:
+            self.layers = nn.ModuleList([])
+
+        self_att_heads = list(map(int, cfg.encoder.self_att_heads.split(",")))
+        if len(self_att_heads) == 1:
+            self_att_heads = [self_att_heads[0] for _ in range(cfg.encoder.layers)]
+        else:
+            assert len(self_att_heads) == cfg.encoder.layers
+
+        self.layers.extend(
+            # [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
+            [
+                self.build_encoder_layer(cfg, num_self_attention_heads=num_self_attention_heads)
+                for num_self_attention_heads in self_att_heads
+            ]
+        )
+        self.num_layers = len(self.layers)
+
+        if cfg.encoder.normalize_before:
+            self.layer_norm = LayerNorm(embed_dim, export=cfg.export)
+        else:
+            self.layer_norm = None
+
+    def build_encoder_layer(self, cfg, num_self_attention_heads):
+        layer = transformer_layer.TransformerEncoderLayerCascade(
+            cfg, num_self_attention_heads=num_self_attention_heads, return_fc=self.return_fc
+        )
+        checkpoint = cfg.checkpoint_activations
+        if checkpoint:
+            offload_to_cpu = cfg.offload_activations
+            layer = checkpoint_wrapper(layer, offload_to_cpu=offload_to_cpu)
+        # if we are checkpointing, enforce that FSDP always wraps the
+        # checkpointed layer, regardless of layer size
+        min_params_to_wrap = cfg.min_params_to_wrap if not checkpoint else 0
+        layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
+        return layer
+

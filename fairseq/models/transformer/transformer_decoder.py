@@ -121,6 +121,10 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 for _ in range(cfg.decoder.layers)
             ]
         )
+        # for _, n_heads in zip(range(cfg.decoder.layers), [1, 2, 4, 4, 8, 8]):
+        #     cfg.decoder.attention_heads = n_heads
+        #     self.layers.append(self.build_decoder_layer(cfg, no_encoder_attn))
+
         self.num_layers = len(self.layers)
 
         if cfg.decoder.normalize_before and not cfg.no_decoder_final_norm:
@@ -480,3 +484,134 @@ class TransformerDecoder(TransformerDecoderBase):
         return super().build_decoder_layer(
             TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn
         )
+
+
+class TransformerDecoderCascade(TransformerDecoderBase):
+
+    def __init__(
+        self,
+        cfg,
+        dictionary,
+        embed_tokens,
+        no_encoder_attn=False,
+        output_projection=None,
+    ):
+        self.cfg = cfg
+        super(TransformerDecoderBase, self).__init__(dictionary)
+        self.register_buffer("version", torch.Tensor([3]))
+        self._future_mask = torch.empty(0)
+
+        self.dropout_module = FairseqDropout(
+            cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
+        )
+        self.decoder_layerdrop = cfg.decoder.layerdrop
+        self.share_input_output_embed = cfg.share_decoder_input_output_embed
+
+        input_embed_dim = embed_tokens.embedding_dim
+        embed_dim = cfg.decoder.embed_dim
+        self.embed_dim = embed_dim
+        self.output_embed_dim = cfg.decoder.output_dim
+
+        self.padding_idx = embed_tokens.padding_idx
+        self.max_target_positions = cfg.max_target_positions
+
+        self.embed_tokens = embed_tokens
+
+        self.embed_scale = 1.0 if cfg.no_scale_embedding else math.sqrt(embed_dim)
+
+        if not cfg.adaptive_input and cfg.quant_noise.pq > 0:
+            self.quant_noise = apply_quant_noise_(
+                nn.Linear(embed_dim, embed_dim, bias=False),
+                cfg.quant_noise.pq,
+                cfg.quant_noise.pq_block_size,
+            )
+        else:
+            self.quant_noise = None
+
+        self.project_in_dim = (
+            Linear(input_embed_dim, embed_dim, bias=False)
+            if embed_dim != input_embed_dim
+            else None
+        )
+        self.embed_positions = (
+            PositionalEmbedding(
+                self.max_target_positions,
+                embed_dim,
+                self.padding_idx,
+                learned=cfg.decoder.learned_pos,
+            )
+            if not cfg.no_token_positional_embeddings
+            else None
+        )
+        if cfg.layernorm_embedding:
+            self.layernorm_embedding = LayerNorm(embed_dim, export=cfg.export)
+        else:
+            self.layernorm_embedding = None
+
+        self.cross_self_attention = cfg.cross_self_attention
+
+        if self.decoder_layerdrop > 0.0:
+            self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
+        else:
+            self.layers = nn.ModuleList([])
+
+        self_att_heads = list(map(int, cfg.decoder.self_att_heads.split(",")))
+        if len(self_att_heads) == 1:
+            self_att_heads = [self_att_heads[0] for _ in range(cfg.decoder.layers)]
+        else:
+            assert len(self_att_heads) == cfg.decoder.layers
+
+        cross_att_heads = list(map(int, cfg.decoder.cross_att_heads.split(",")))
+        if len(cross_att_heads) == 1:
+            cross_att_heads = [cross_att_heads[0] for _ in range(cfg.decoder.layers)]
+        else:
+            assert len(cross_att_heads) == cfg.decoder.layers
+
+        self.layers.extend(
+            [
+                self.build_decoder_layer(
+                    cfg,
+                    num_self_attention_heads=num_self_attention_heads,
+                    num_cross_attention_heads=num_cross_attention_heads,
+                    no_encoder_attn=no_encoder_attn)
+                for num_self_attention_heads, num_cross_attention_heads in zip(self_att_heads, cross_att_heads)
+            ]
+        )
+        # for _, n_heads in zip(range(cfg.decoder.layers), [1, 2, 4, 4, 8, 8]):
+        #     cfg.decoder.attention_heads = n_heads
+        #     self.layers.append(self.build_decoder_layer(cfg, no_encoder_attn))
+
+        self.num_layers = len(self.layers)
+
+        if cfg.decoder.normalize_before and not cfg.no_decoder_final_norm:
+            self.layer_norm = LayerNorm(embed_dim, export=cfg.export)
+        else:
+            self.layer_norm = None
+
+        self.project_out_dim = (
+            Linear(embed_dim, self.output_embed_dim, bias=False)
+            if embed_dim != self.output_embed_dim and not cfg.tie_adaptive_weights
+            else None
+        )
+
+        self.adaptive_softmax = None
+        self.output_projection = output_projection
+        if self.output_projection is None:
+            self.build_output_projection(cfg, dictionary, embed_tokens)
+
+    def build_decoder_layer(self, cfg, num_self_attention_heads, num_cross_attention_heads, no_encoder_attn=False):
+        layer = transformer_layer.TransformerDecoderLayerCascade(
+            cfg,
+            num_self_attention_heads=num_self_attention_heads,
+            num_cross_attention_heads=num_cross_attention_heads,
+            no_encoder_attn=no_encoder_attn)
+        checkpoint = cfg.checkpoint_activations
+        if checkpoint:
+            offload_to_cpu = cfg.offload_activations
+            layer = checkpoint_wrapper(layer, offload_to_cpu=offload_to_cpu)
+        # if we are checkpointing, enforce that FSDP always wraps the
+        # checkpointed layer, regardless of layer size
+        min_params_to_wrap = cfg.min_params_to_wrap if not checkpoint else 0
+        layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
+        return layer
+

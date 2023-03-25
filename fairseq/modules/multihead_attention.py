@@ -769,7 +769,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
             # the transpose is a no-op copy before view, thus unnecessary
             attn = attn.contiguous().view(tgt_len, bsz, self.embed_dim)
         else:
-            attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, self.embed_dim)
+            attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
         attn_weights: Optional[Tensor] = None
         if need_weights:
@@ -908,3 +908,111 @@ class MultiheadAttention(FairseqIncrementalDecoder):
 
         for key, value in items_to_add.items():
             state_dict[key] = value
+
+
+class CascadeMultiheadAttention(MultiheadAttention):
+    def __init__(
+            self,
+            embed_dim,
+            num_heads,
+            head_dim,
+            kdim=None,
+            vdim=None,
+            dropout=0.0,
+            bias=True,
+            add_bias_kv=False,
+            add_zero_attn=False,
+            self_attention=False,
+            encoder_decoder_attention=False,
+            dictionary=None,
+            q_noise=0.0,
+            qn_block_size=8,
+            # TODO: pass in config rather than string.
+            # config defined in xformers.components.attention.AttentionConfig
+            xformers_att_config: Optional[str] = None,
+            xformers_blocksparse_layout: Optional[
+                torch.Tensor
+            ] = None,  # This should be part of the config
+            xformers_blocksparse_blocksize: Optional[
+                int
+            ] = 16,  # This should be part of the config
+    ):
+        super(MultiheadAttention, self).__init__(dictionary)
+
+        xformers_att_config = utils.eval_str_dict(xformers_att_config)
+        self.use_xformers = xformers_att_config is not None
+        if self.use_xformers and not _xformers_available:
+            raise ImportError("\n\n  Please install xFormers.")
+        self.embed_dim = embed_dim
+        self.kdim = kdim if kdim is not None else embed_dim
+        self.vdim = vdim if vdim is not None else embed_dim
+        self.qkv_same_dim = self.kdim == embed_dim and self.vdim == embed_dim
+
+        self.num_heads = num_heads
+        self.dropout_module = FairseqDropout(
+            dropout, module_name=self.__class__.__name__
+        )
+
+        self.head_dim = head_dim
+        # assert (
+        #         self.head_dim * num_heads == self.embed_dim
+        # ), "embed_dim must be divisible by num_heads"
+        self.scaling = self.head_dim ** -0.5
+
+        self.self_attention = self_attention
+        self.encoder_decoder_attention = encoder_decoder_attention
+
+        assert not self.self_attention or self.qkv_same_dim, (
+            "Self-attention requires query, key and " "value to be of the same size"
+        )
+
+
+        self.k_proj = quant_noise(
+            nn.Linear(self.kdim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
+        )
+        self.v_proj = quant_noise(
+            nn.Linear(self.vdim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
+        )
+        self.q_proj = quant_noise(
+            nn.Linear(embed_dim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
+        )
+
+        self.out_proj = quant_noise(
+            nn.Linear(self.head_dim * self.num_heads, embed_dim, bias=bias), q_noise, qn_block_size
+        )
+
+        if add_bias_kv:
+            self.bias_k = Parameter(torch.Tensor(1, 1, self.head_dim * self.num_heads))
+            self.bias_v = Parameter(torch.Tensor(1, 1, self.head_dim * self.num_heads))
+        else:
+            self.bias_k = self.bias_v = None
+
+        self._set_skip_embed_dim_check()
+        self.add_zero_attn = add_zero_attn
+        self.beam_size = 1
+        self.reset_parameters()
+
+        if self.use_xformers:
+            xformers_att_config["dropout"] = xformers_att_config.get("dropout", dropout)
+            xformers_att_config["num_heads"] = xformers_att_config.get(
+                "num_heads", num_heads
+            )
+
+            if xformers_blocksparse_layout is not None:
+                # Could be part of a single config passed only once
+                xformers_att_config["block_size"] = xformers_blocksparse_blocksize
+                xformers_att_config["layout"] = xformers_blocksparse_layout
+                xformers_att_config["name"] = "blocksparse"
+
+            self.attention = build_attention(xformers_att_config)
+
+        self.onnx_trace = False
+        self.skip_embed_dim_check = True
+        self.init_incremental_state()
+
+    def forward(
+        self,
+        **kwargs
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        return super().forward(**kwargs)
+

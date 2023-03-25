@@ -10,8 +10,8 @@ from .transformer_config import (
     DEFAULT_MAX_TARGET_POSITIONS,
     DEFAULT_MIN_PARAMS_TO_WRAP,
 )
-from .transformer_decoder import TransformerDecoder, TransformerDecoderBase, Linear
-from .transformer_encoder import TransformerEncoder, TransformerEncoderBase
+from .transformer_decoder import TransformerDecoder, TransformerDecoderBase, TransformerDecoderCascade, Linear
+from .transformer_encoder import TransformerEncoder, TransformerEncoderBase, TransformerEncoderCascade
 from .transformer_legacy import (
     TransformerModel,
     base_architecture,
@@ -31,8 +31,10 @@ __all__ = [
     "TransformerConfig",
     "TransformerDecoder",
     "TransformerDecoderBase",
+    "TransformerDecoderCascade",
     "TransformerEncoder",
     "TransformerEncoderBase",
+    "TransformerEncoderCascade",
     "TransformerModel",
     "Embedding",
     "Linear",

@@ -11,7 +11,7 @@ from torch import Tensor
 
 from fairseq import utils
 from fairseq.models.transformer import TransformerConfig
-from fairseq.modules import LayerNorm, MultiheadAttention
+from fairseq.modules import LayerNorm, MultiheadAttention, CascadeMultiheadAttention
 from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.quant_noise import quant_noise
 
@@ -359,7 +359,7 @@ class TransformerDecoderLayerBase(nn.Module):
             self_attention=not cfg.cross_self_attention,
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
-            xformers_att_config=cfg.decoder.xformers_att_config,
+            xformers_att_config=cfg.encoder.xformers_att_config,
         )
 
     def build_encoder_attention(self, embed_dim, cfg):
@@ -560,3 +560,68 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
             embed_dim,
             TransformerConfig.from_namespace(args),
         )
+
+
+class TransformerEncoderLayerCascade(TransformerEncoderLayerBase):
+    def __init__(
+        self, cfg, num_self_attention_heads, return_fc=False
+    ):
+        self.num_self_attention_heads = num_self_attention_heads
+        super().__init__(cfg, return_fc=return_fc)
+
+    def build_self_attention(self, embed_dim, cfg):
+        return CascadeMultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=self.num_self_attention_heads,
+            head_dim=cfg.encoder.head_dim,
+            dropout=cfg.attention_dropout,
+            self_attention=True,
+            q_noise=self.quant_noise,
+            qn_block_size=self.quant_noise_block_size,
+            xformers_att_config=cfg.encoder.xformers_att_config,
+        )
+
+
+class TransformerDecoderLayerCascade(TransformerDecoderLayerBase):
+
+    def __init__(
+            self,
+            cfg,
+            num_self_attention_heads,
+            num_cross_attention_heads,
+            no_encoder_attn=False,
+            add_bias_kv=False,
+            add_zero_attn=False
+    ):
+        self.num_self_attention_heads = num_self_attention_heads
+        self.num_cross_attention_heads = num_cross_attention_heads
+        super().__init__(cfg, no_encoder_attn=no_encoder_attn, add_bias_kv=add_bias_kv, add_zero_attn=add_zero_attn)
+
+    def build_self_attention(self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False):
+        return CascadeMultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=self.num_self_attention_heads,
+            head_dim=cfg.decoder.head_dim,
+            dropout=cfg.attention_dropout,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+            self_attention=not cfg.cross_self_attention,
+            q_noise=self.quant_noise,
+            qn_block_size=self.quant_noise_block_size,
+            xformers_att_config=cfg.encoder.xformers_att_config,
+        )
+
+    def build_encoder_attention(self, embed_dim, cfg):
+        return CascadeMultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=self.num_cross_attention_heads,
+            head_dim=cfg.decoder.head_dim,
+            kdim=cfg.encoder.embed_dim,
+            vdim=cfg.encoder.embed_dim,
+            dropout=cfg.attention_dropout,
+            encoder_decoder_attention=True,
+            q_noise=self.quant_noise,
+            qn_block_size=self.quant_noise_block_size,
+            xformers_att_config=cfg.encoder.xformers_att_config,
+        )
+

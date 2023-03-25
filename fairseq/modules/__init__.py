@@ -30,7 +30,7 @@ from .lightweight_convolution import LightweightConv, LightweightConv1dTBC
 from .linearized_convolution import LinearizedConvolution
 from .location_attention import LocationAttention
 from .lstm_cell_with_zoneout import LSTMCellWithZoneOut
-from .multihead_attention import MultiheadAttention
+from .multihead_attention import MultiheadAttention, CascadeMultiheadAttention
 from .positional_embedding import PositionalEmbedding
 from .same_pad import SamePad
 from .scalar_bias import ScalarBias
@@ -39,7 +39,12 @@ from .transformer_sentence_encoder_layer import TransformerSentenceEncoderLayer
 from .transformer_sentence_encoder import TransformerSentenceEncoder
 from .transpose_last import TransposeLast
 from .unfold import unfold1d
-from .transformer_layer import TransformerDecoderLayer, TransformerEncoderLayer
+from .transformer_layer import (
+    TransformerDecoderLayer,
+    TransformerDecoderLayerCascade,
+    TransformerEncoderLayer,
+    TransformerEncoderLayerCascade
+)
 from .vggblock import VGGBlock
 from .espnet_multihead_attention import (
     ESPNETMultiHeadedAttention,
@@ -56,6 +61,7 @@ __all__ = [
     "AdaptiveSoftmax",
     "BaseLayer",
     "BeamableMM",
+    "CascadeMultiheadAttention",
     "CharacterTokenEmbedder",
     "ConvTBC",
     "cross_entropy",
@@ -92,11 +98,13 @@ __all__ = [
     "TransformerSentenceEncoderLayer",
     "TransformerSentenceEncoder",
     "TransformerDecoderLayer",
+    "TransformerDecoderLayerCascade",
     "TransformerEncoderLayer",
+    "TransformerEncoderLayerCascade",
     "TransposeLast",
     "VGGBlock",
     "unfold1d",
-    "ESPNETMultiheadedAttention",
+    "ESPNETMultiHeadedAttention",
     "PositionalEmbedding",
     "RelPositionMultiHeadedAttention",
     "RelPositionalEncoding",
