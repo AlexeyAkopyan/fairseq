@@ -11,6 +11,7 @@ from fairseq.models.transformer.transformer_config import TransformerConfig
 
 from fairseq.models.transformer import (
     transformer_iwslt_de_en,
+    transformer_vaswani_wmt_en_de_big,
     transformer_vaswani_wmt_en_fr_big,
     TransformerDecoderCascade,
     TransformerEncoderCascade,
@@ -56,11 +57,11 @@ class TransformerModelCascade(TransformerModel):
         )
 
 
-@register_model_architecture("transformer_cascade", "transformer_cascade")
-def transformer_cascade(args):
-    args.encoder_head_dim = getattr(args, "encoder_head_dim", 128)
-    args.decoder_head_dim = getattr(args, "decoder_head_dim", 128)
-    transformer_iwslt_de_en(args)
+# @register_model_architecture("transformer_cascade", "transformer_cascade")
+# def transformer_cascade(args):
+#     args.encoder_head_dim = getattr(args, "encoder_head_dim", 128)
+#     args.decoder_head_dim = getattr(args, "decoder_head_dim", 128)
+#     transformer_iwslt_de_en(args)
 
 
 @register_model_architecture("transformer_cascade", "transformer_cascade_wmt_en_fr_big")
@@ -72,3 +73,23 @@ def transformer_cascade_wmt_en_fr_big(args):
     args.decoder_head_dim = getattr(args, "decoder_head_dim", 64)
     transformer_vaswani_wmt_en_fr_big(args)
 
+
+@register_model_architecture("transformer_cascade", "transformer_cascade_wmt_en_de_big")
+def transformer_cascade_wmt_en_de_big(args):
+    args.encoder_self_att_heads = getattr(args, "encoder_self_att_heads", "8,8,16,16,24,24")
+    args.decoder_self_att_heads = getattr(args, "decoder_self_att_heads", "8,8,16,16,24,24")
+    args.decoder_cross_att_heads = getattr(args, "decoder_cross_att_heads", "8,8,16,16,24,24")
+    args.encoder_head_dim = getattr(args, "encoder_head_dim", 64)
+    args.decoder_head_dim = getattr(args, "decoder_head_dim", 64)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    transformer_vaswani_wmt_en_de_big(args)
+
+
+@register_model_architecture("transformer_cascade", "transformer_cascade_iwslt_de_en")
+def transformer_cascade_iwslt_de_en(args):
+    args.encoder_self_att_heads = getattr(args, "encoder_self_att_heads", "4,4,4,4,4,4")
+    args.decoder_self_att_heads = getattr(args, "decoder_self_att_heads", "4,4,4,4,4,4")
+    args.decoder_cross_att_heads = getattr(args, "decoder_cross_att_heads", "2,2,4,4,6,6")
+    args.encoder_head_dim = getattr(args, "encoder_head_dim", 128)
+    args.decoder_head_dim = getattr(args, "decoder_head_dim", 128)
+    transformer_iwslt_de_en(args)
