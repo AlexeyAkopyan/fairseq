@@ -974,11 +974,11 @@ class CascadeMultiheadAttention(MultiheadAttention):
             nn.Linear(self.vdim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
         )
         self.q_proj = quant_noise(
-            nn.Linear(embed_dim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
+            nn.Linear(self.embed_dim, self.head_dim * self.num_heads, bias=bias), q_noise, qn_block_size
         )
 
         self.out_proj = quant_noise(
-            nn.Linear(self.head_dim * self.num_heads, embed_dim, bias=bias), q_noise, qn_block_size
+            nn.Linear(self.head_dim * self.num_heads, self.embed_dim, bias=bias), q_noise, qn_block_size
         )
 
         if add_bias_kv:
@@ -1015,4 +1015,38 @@ class CascadeMultiheadAttention(MultiheadAttention):
         **kwargs
     ) -> Tuple[Tensor, Optional[Tensor]]:
         return super().forward(**kwargs)
+
+    def prune_head(self, heads_to_prune):
+        save_mask = torch.LongTensor(
+            [
+                i
+                for i in range(self.head_dim * self.num_heads)
+                if i // self.head_dim not in heads_to_prune
+            ]
+        )
+        num_saved_heads = self.num_heads - len(heads_to_prune)
+        bias = self.out_proj.bias is not None
+
+        pruned_k_proj = nn.Linear(self.kdim, self.head_dim * num_saved_heads, bias=bias)
+        pruned_v_proj = nn.Linear(self.vdim, self.head_dim * num_saved_heads, bias=bias)
+        pruned_q_proj = nn.Linear(self.embed_dim, self.head_dim * num_saved_heads, bias=bias)
+        pruned_out_proj = nn.Linear(self.head_dim * num_saved_heads, self.embed_dim, bias=bias)
+
+        pruned_k_proj.weight.data = self.k_proj.weight.data[save_mask, :]
+        pruned_v_proj.weight.data = self.v_proj.weight.data[save_mask, :]
+        pruned_q_proj.weight.data = self.q_proj.weight.data[save_mask, :]
+        pruned_out_proj.weight.data = self.out_proj.weight.data[:, save_mask]
+
+        if bias:
+            pruned_k_proj.bias.data = self.k_proj.bias.data[save_mask]
+            pruned_v_proj.bias.data = self.v_proj.bias.data[save_mask]
+            pruned_q_proj.bias.data = self.q_proj.bias.data[save_mask]
+
+        self.k_proj = pruned_k_proj
+        self.v_proj = pruned_v_proj
+        self.q_proj = pruned_q_proj
+        self.out_proj = pruned_out_proj
+
+        self.num_heads = num_saved_heads
+
 
