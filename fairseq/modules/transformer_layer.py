@@ -595,6 +595,8 @@ class TransformerDecoderLayerCascade(TransformerDecoderLayerBase):
     ):
         self.num_self_attention_heads = num_self_attention_heads
         self.num_cross_attention_heads = num_cross_attention_heads
+        if self.num_cross_attention_heads == 0:
+            no_encoder_attn = True
         super().__init__(cfg, no_encoder_attn=no_encoder_attn, add_bias_kv=add_bias_kv, add_zero_attn=add_zero_attn)
 
     def build_self_attention(self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False):
