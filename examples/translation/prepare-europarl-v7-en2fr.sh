@@ -8,7 +8,10 @@ REM_NON_PRINT_CHAR=$SCRIPTS/tokenizer/remove-non-printing-char.perl
 BPEROOT=subword-nmt/subword_nmt
 BPE_TOKENS=40000
 
-
+URLS=(
+    "http://statmt.org/wmt13/training-parallel-europarl-v7.tgz"
+    "http://statmt.org/wmt14/test-full.tgz"
+)
 FILES=(
     "training-parallel-europarl-v7.tgz"
     "test-full.tgz"
@@ -29,6 +32,33 @@ prep=En_Fr
 tmp=$prep/tmp
 orig=orig
 
+mkdir -p $orig $tmp $prep
+
+cd $orig
+
+for ((i=0;i<${#URLS[@]};++i)); do
+    file=${FILES[i]}
+    if [ -f $file ]; then
+        echo "$file already exists, skipping download"
+    else
+        url=${URLS[i]}
+        wget "$url"
+        if [ -f $file ]; then
+            echo "$url successfully downloaded."
+        else
+            echo "$url not successfully downloaded."
+            exit -1
+        fi
+        if [ ${file: -4} == ".tgz" ]; then
+            tar zxvf $file
+        elif [ ${file: -4} == ".tar" ]; then
+            tar xvf $file
+        fi
+    fi
+done
+
+cd ..
+
 echo "pre-processing train data..."
 for l in $src $tgt; do
     rm $tmp/train.tags.$lang.tok.$l
@@ -36,7 +66,7 @@ for l in $src $tgt; do
         cat $orig/$f.$l | \
             perl $NORM_PUNC $l | \
             perl $REM_NON_PRINT_CHAR | \
-            perl $TOKENIZER -threads 11 -a -l $l >> $tmp/train.tags.$lang.tok.$l
+            perl $TOKENIZER -threads 8 -a -l $l >> $tmp/train.tags.$lang.tok.$l
     done
 done
 
@@ -51,7 +81,7 @@ for l in $src $tgt; do
         sed -e 's/<seg id="[0-9]*">\s*//g' | \
         sed -e 's/\s*<\/seg>\s*//g' | \
         sed -e "s/\’/\'/g" | \
-    perl $TOKENIZER -threads 11 -a -l $l > $tmp/test.$l
+    perl $TOKENIZER -threads 8 -a -l $l > $tmp/test.$l
     echo ""
 done
 
